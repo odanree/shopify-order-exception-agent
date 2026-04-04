@@ -55,6 +55,29 @@ def _get_llm():
     )
 
 
+def _get_langfuse_handler(session_id: str, node_name: str, tags: list[str] | None = None):
+    """Return a LangFuse CallbackHandler for the given session, or None if disabled/unavailable."""
+    try:
+        settings = get_settings()
+        if not settings.langfuse_enabled or not settings.langfuse_public_key:
+            return None
+        from langfuse.callback import CallbackHandler
+        return CallbackHandler(
+            public_key=settings.langfuse_public_key,
+            secret_key=settings.langfuse_secret_key,
+            host=settings.langfuse_host,
+            trace_name=node_name,
+            session_id=session_id,
+            user_id="system",
+            tags=tags or ["order-exception-agent"],
+        )
+    except ImportError:
+        return None
+    except Exception as exc:
+        logger.warning("langfuse_handler_init_failed", node=node_name, error=str(exc))
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Nodes
 # ---------------------------------------------------------------------------
@@ -89,10 +112,14 @@ async def triage_event(state: OrderExceptionState) -> OrderExceptionState:
             SystemMessage(content=EXCEPTION_TRIAGE_SYSTEM),
             HumanMessage(content=prompt),
         ]
-        response = await llm.ainvoke(messages)
+        lf_handler = _get_langfuse_handler(state["webhook_id"], "triage_event")
+        invoke_config = {"callbacks": [lf_handler]} if lf_handler else {}
+        response = await llm.ainvoke(messages, config=invoke_config)
         exception_type = response.content.strip().lower()
         if exception_type not in ROUTING_MAP:
             exception_type = "unknown"
+        if lf_handler:
+            lf_handler.flush()
     except Exception as exc:
         logger.error("triage_llm_failed", order_id=order_id, error=str(exc))
         exception_type = "unknown"

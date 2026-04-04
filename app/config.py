@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     threpl_webhook_url: str = ""
     threpl_api_key: str = ""
 
+    # LangFuse tracing (optional — leave blank to disable)
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "https://cloud.langfuse.com"
+    langfuse_enabled: bool = True
+
     # App
     app_env: str = "development"
     log_level: str = "INFO"

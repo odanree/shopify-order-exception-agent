@@ -19,6 +19,7 @@ dependencies = [
     "langgraph>=0.2.55",
     "langchain-anthropic>=0.3.0",
     "langchain-core>=0.3.0",
+    "langfuse>=2.36.0",
     "structlog>=25.1.0",
     "python-dotenv>=1.0.0",
 ]
