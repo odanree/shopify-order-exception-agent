@@ -48,6 +48,17 @@ class Settings(BaseSettings):
     # Admin
     admin_api_key: str = ""  # if empty, admin endpoints require no auth (dev only)
 
+    # Agent mode: "live" | "shadow"
+    # shadow = full graph execution but all Shopify write mutations are skipped
+    agent_mode: str = "live"
+
+    # High-value order manual review threshold (USD)
+    # Orders above this total bypass automated action and require operator sign-off
+    high_value_review_threshold_usd: float = 500.0
+
+    # Sentry error monitoring (leave blank to disable)
+    sentry_dsn: str = ""
+
     # App
     app_env: str = "development"
     log_level: str = "INFO"

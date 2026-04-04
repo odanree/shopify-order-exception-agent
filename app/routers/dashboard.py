@@ -22,6 +22,8 @@ _SEVEN_DAYS = timedelta(days=7)
 
 @router.get("/api/dashboard/stats")
 async def get_stats(request: Request):
+    from app.config import get_settings
+    settings = get_settings()
     seven_days_ago = datetime.now(timezone.utc) - _SEVEN_DAYS
 
     async with AsyncSessionLocal() as session:
@@ -53,6 +55,7 @@ async def get_stats(request: Request):
 
     return {
         "window": "7d",
+        "shadow_mode": settings.agent_mode == "shadow",
         "total_processed": total,
         "success_rate_pct": success_rate,
         "avg_processing_ms": round(avg_ms or 0),
@@ -110,9 +113,15 @@ _DASHBOARD_HTML = dedent("""\
   .badge.payment { background: #4a1d96; color: #c4b5fd; }
   .badge.unknown { background: #1e293b; color: #94a3b8; }
   .refresh { font-size: .7rem; color: #475569; }
+  .shadow-banner { background: #78350f; border-bottom: 2px solid #d97706;
+                   padding: .6rem 2rem; font-size: .8rem; font-weight: 600;
+                   color: #fde68a; letter-spacing: .03em; display: none; }
 </style>
 </head>
 <body>
+<div class="shadow-banner" id="shadow-banner">
+  ⚠ SHADOW MODE — mutations are logged but not applied to Shopify
+</div>
 <header>
   <h1>🤖 Order Exception Agent</h1>
   <span class="refresh" id="last-updated">Loading…</span>
@@ -133,6 +142,7 @@ async function load() {
     const d = await r.json();
     document.getElementById('last-updated').textContent =
       'Last updated: ' + new Date().toLocaleTimeString();
+    document.getElementById('shadow-banner').style.display = d.shadow_mode ? 'block' : 'none';
     document.getElementById('cards').innerHTML = `
       <div class="card blue">
         <div class="label">Events Processed (7d)</div>

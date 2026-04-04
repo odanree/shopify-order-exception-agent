@@ -54,6 +54,7 @@ ROUTING_MAP = {
     "fulfillment_delay": "tag_and_3pl",
     "payment_issue": "escalate",
     "unknown": "tag_only",
+    "require_manual_review": "require_manual_review",
 }
 
 EXCEPTION_TAGS = {
@@ -63,6 +64,7 @@ EXCEPTION_TAGS = {
     "fulfillment_delay": "exception:fulfillment-delay",
     "payment_issue": "exception:payment-issue",
     "unknown": "exception:unknown",
+    "require_manual_review": "exception:manual-review-required",
 }
 
 
@@ -153,9 +155,30 @@ async def triage_event(state: OrderExceptionState) -> OrderExceptionState:
 
 
 async def make_decision(state: OrderExceptionState) -> OrderExceptionState:
-    """Rule-based routing: map exception type → action decision."""
+    """Rule-based routing: map exception type → action decision.
+
+    High-value orders (total > high_value_review_threshold_usd) override automated
+    routing to require_manual_review regardless of exception type.
+    """
+    settings = get_settings()
     exception_type = state.get("exception_type") or "unknown"
     routing = ROUTING_MAP.get(exception_type, "tag_only")
+
+    # High-value override: any order above the threshold bypasses automated action
+    try:
+        order_total = float(state["raw_payload"].get("total_price", "0.00") or "0.00")
+    except (ValueError, TypeError):
+        order_total = 0.0
+
+    if order_total > settings.high_value_review_threshold_usd:
+        routing = "require_manual_review"
+        logger.info(
+            "high_value_override",
+            order_id=state["order_id"],
+            order_total=order_total,
+            threshold=settings.high_value_review_threshold_usd,
+        )
+
     logger.info("decision_made", order_id=state["order_id"], routing=routing)
     return {**state, "routing_decision": routing}
 
@@ -173,8 +196,30 @@ async def execute_action(state: OrderExceptionState) -> OrderExceptionState:
     order_id = state["order_id"]
     routing = state.get("routing_decision", "tag_only")
     exception_type = state.get("exception_type", "unknown")
-    exception_tag = EXCEPTION_TAGS.get(exception_type, "exception:unknown")
+    exception_tag = EXCEPTION_TAGS.get(
+        routing if routing == "require_manual_review" else exception_type,
+        "exception:unknown",
+    )
     settings = get_settings()
+
+    # Shadow mode: log the full intended action but skip all write mutations
+    if settings.agent_mode == "shadow":
+        logger.info(
+            "execute_action_shadowed",
+            order_id=order_id,
+            routing=routing,
+            exception_type=exception_type,
+            would_apply_tag=exception_tag,
+            would_hold=routing in FULFILLMENT_HOLD_REASONS,
+        )
+        return {
+            **state,
+            "shadowed": True,
+            "tool_calls_log": state.get("tool_calls_log", []),
+            "fulfillment_held": False,
+            "error": None,
+            "retry_count": state.get("retry_count", 0),
+        }
 
     # Reset context var for this invocation and start with existing log
     _tool_calls_ctx.set(list(state.get("tool_calls_log", [])))
@@ -209,6 +254,34 @@ async def execute_action(state: OrderExceptionState) -> OrderExceptionState:
                     reason=hold_reason,
                     error=hold_result.get("error"),
                 )
+
+        # High-value manual review — tag + critical Slack alert, no automated hold
+        if routing == "require_manual_review":
+            order_total = state["raw_payload"].get("total_price", "0.00")
+            msg = (
+                f"🔴 *Manual Review Required* — Order `{order_id}`\n"
+                f"Order total: *${order_total}* exceeds the ${settings.high_value_review_threshold_usd:.0f} threshold.\n"
+                f"Exception type: `{exception_type}` | Please review in Shopify before any action."
+            )
+            if _event_router is not None:
+                await _event_router.emit(
+                    "order_exception_alert",
+                    {
+                        "channel": settings.slack_default_channel,
+                        "order_id": order_id,
+                        "message": msg,
+                        "severity": "critical",
+                    },
+                )
+            updated_log = _tool_calls_ctx.get([])
+            return {
+                **state,
+                "tool_calls_log": updated_log,
+                "fulfillment_held": False,
+                "error": None,
+                "retry_count": state.get("retry_count", 0),
+                "shadowed": False,
+            }
 
         # Slack notification — emitted to pub/sub router (clawhip pattern)
         if routing in ("tag_and_slack", "tag_slack_and_3pl", "escalate"):
@@ -253,6 +326,7 @@ async def execute_action(state: OrderExceptionState) -> OrderExceptionState:
         **state,
         "tool_calls_log": updated_log,
         "fulfillment_held": fulfillment_held,
+        "shadowed": False,
         "error": error,
         "retry_count": retry_count,
     }
@@ -365,6 +439,22 @@ async def handle_dead_letter(state: OrderExceptionState) -> OrderExceptionState:
         error=state.get("error"),
         retry_count=state.get("retry_count"),
     )
+
+    try:
+        import sentry_sdk
+        sentry_sdk.capture_message(
+            f"Order exception dead-letter: {order_id}",
+            level="error",
+            extras={
+                "order_id": order_id,
+                "webhook_id": state["webhook_id"],
+                "error": state.get("error"),
+                "retry_count": state.get("retry_count"),
+                "exception_type": state.get("exception_type"),
+            },
+        )
+    except ImportError:
+        pass
 
     try:
         if AsyncSessionLocal is not None:

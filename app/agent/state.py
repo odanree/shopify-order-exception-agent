@@ -28,6 +28,9 @@ class OrderExceptionState(TypedDict):
     # Set by verify_action node
     verification_passed: bool | None
 
+    # Set when agent_mode == "shadow": mutations skipped, full graph still runs
+    shadowed: bool | None
+
     # Error tracking for dead-letter routing
     error: str | None
     retry_count: int
