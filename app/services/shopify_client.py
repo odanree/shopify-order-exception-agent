@@ -62,6 +62,32 @@ mutation TagsRemove($id: ID!, $tags: [String!]!) {
 }
 """
 
+FULFILLMENT_ORDERS_QUERY = """
+query GetFulfillmentOrders($orderId: ID!) {
+  order(id: $orderId) {
+    fulfillmentOrders(first: 5) {
+      edges {
+        node {
+          id
+          status
+          requestStatus
+          assignedLocation { id name }
+        }
+      }
+    }
+  }
+}
+"""
+
+FULFILLMENT_HOLD_MUTATION = """
+mutation FulfillmentOrderHold($id: ID!, $reason: FulfillmentHoldReason!, $note: String) {
+  fulfillmentOrderHold(id: $id, holdInput: { reason: $reason, notifyMerchant: false, holdNote: $note }) {
+    fulfillmentOrder { id status }
+    userErrors { field message }
+  }
+}
+"""
+
 
 class ShopifyGraphQLClient:
     BUCKET_KEY = "shopify:bucket:available"
@@ -173,6 +199,27 @@ class ShopifyGraphQLClient:
             data = await self.execute(TAGS_REMOVE_MUTATION, {"id": gid, "tags": tags_to_remove})
             result["remove"] = data.get("tagsRemove", {})
         return result
+
+    async def get_fulfillment_orders(self, order_id: str) -> list[dict]:
+        """Return open FulfillmentOrder nodes for an order."""
+        gid = order_id if order_id.startswith("gid://") else f"gid://shopify/Order/{order_id}"
+        data = await self.execute(FULFILLMENT_ORDERS_QUERY, {"orderId": gid})
+        edges = (data.get("order") or {}).get("fulfillmentOrders", {}).get("edges", [])
+        return [e["node"] for e in edges]
+
+    async def hold_fulfillment_order(
+        self, fulfillment_order_id: str, reason: str, note: str = ""
+    ) -> dict:
+        """Place a hold on a FulfillmentOrder. reason must be a FulfillmentHoldReason enum value."""
+        data = await self.execute(
+            FULFILLMENT_HOLD_MUTATION,
+            {"id": fulfillment_order_id, "reason": reason, "note": note or None},
+        )
+        result = data.get("fulfillmentOrderHold", {})
+        errors = result.get("userErrors", [])
+        if errors:
+            raise RuntimeError(f"FulfillmentOrder hold errors: {errors}")
+        return result.get("fulfillmentOrder", {})
 
     async def close(self):
         await self._client.aclose()

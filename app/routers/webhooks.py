@@ -2,6 +2,9 @@
 
 Shopify requires a 200 response within 5 seconds. We return immediately and
 hand off all processing to a FastAPI BackgroundTask.
+
+Kill switch: if agent:enabled:{store_domain} is "0" in Redis, webhooks are
+accepted (200 OK) but NOT processed — no graph execution, no side-effects.
 """
 import time
 
@@ -10,7 +13,9 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Request
 
 from app.agent.graph import process_webhook_event
 from app.agent.state import OrderExceptionState
+from app.config import get_settings
 from app.middleware.verify_webhook import verify_shopify_webhook
+from app.services import kill_switch
 from app.services.idempotency import IdempotencyService
 
 logger = structlog.get_logger()
@@ -39,6 +44,11 @@ def _extract_order_id(payload: dict) -> str:
     return str(payload.get("id", "unknown"))
 
 
+async def _check_kill_switch(request: Request) -> bool:
+    settings = get_settings()
+    return await kill_switch.is_enabled(request.app.state.redis, settings.active_shopify_domain)
+
+
 @router.post("/orders/create")
 async def order_created(
     request: Request,
@@ -48,6 +58,10 @@ async def order_created(
 ):
     webhook_id = request.headers.get("X-Shopify-Webhook-Id", f"no-id-{time.time()}")
     order_id = _extract_order_id(payload)
+
+    if not await _check_kill_switch(request):
+        logger.warning("kill_switch_active", event="orders/create", order_id=order_id)
+        return {"status": "accepted", "action": "suppressed_kill_switch"}
 
     if not await idempotency.mark_processed(webhook_id):
         return {"status": "duplicate", "webhook_id": webhook_id}
@@ -59,6 +73,8 @@ async def order_created(
         "raw_payload": payload,
         "exception_type": None,
         "routing_decision": None,
+        "verification_passed": None,
+        "fulfillment_held": None,
         "tool_calls_log": [],
         "error": None,
         "retry_count": 0,
@@ -81,6 +97,10 @@ async def order_updated(
     webhook_id = request.headers.get("X-Shopify-Webhook-Id", f"no-id-{time.time()}")
     order_id = _extract_order_id(payload)
 
+    if not await _check_kill_switch(request):
+        logger.warning("kill_switch_active", event="orders/updated", order_id=order_id)
+        return {"status": "accepted", "action": "suppressed_kill_switch"}
+
     if not await idempotency.mark_processed(webhook_id):
         return {"status": "duplicate", "webhook_id": webhook_id}
 
@@ -91,6 +111,8 @@ async def order_updated(
         "raw_payload": payload,
         "exception_type": None,
         "routing_decision": None,
+        "verification_passed": None,
+        "fulfillment_held": None,
         "tool_calls_log": [],
         "error": None,
         "retry_count": 0,
@@ -113,6 +135,10 @@ async def fulfillment_updated(
     webhook_id = request.headers.get("X-Shopify-Webhook-Id", f"no-id-{time.time()}")
     order_id = str(payload.get("order_id", "unknown"))
 
+    if not await _check_kill_switch(request):
+        logger.warning("kill_switch_active", event="fulfillment_events/create", order_id=order_id)
+        return {"status": "accepted", "action": "suppressed_kill_switch"}
+
     if not await idempotency.mark_processed(webhook_id):
         return {"status": "duplicate", "webhook_id": webhook_id}
 
@@ -123,6 +149,8 @@ async def fulfillment_updated(
         "raw_payload": payload,
         "exception_type": None,
         "routing_decision": None,
+        "verification_passed": None,
+        "fulfillment_held": None,
         "tool_calls_log": [],
         "error": None,
         "retry_count": 0,

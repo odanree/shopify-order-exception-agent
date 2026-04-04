@@ -102,10 +102,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
-from app.routers import webhooks, dlq  # noqa: E402
+from app.routers import webhooks, dlq, admin, dashboard  # noqa: E402
 
 app.include_router(webhooks.router)
 app.include_router(dlq.router)
+app.include_router(admin.router)
+app.include_router(dashboard.router)
 
 
 @app.get("/health")

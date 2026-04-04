@@ -67,6 +67,12 @@ class Notify3PLArgs(BaseModel):
     urgency: str = Field(default="medium", description="low | medium | high")
 
 
+class HoldFulfillmentArgs(BaseModel):
+    order_id: str = Field(description="Shopify order ID — used to look up FulfillmentOrder IDs")
+    reason: str = Field(description="FulfillmentHoldReason enum: HIGH_RISK_OF_FRAUD | INCORRECT_ADDRESS | AWAITING_PAYMENT | UNFULFILLABLE | UNKNOWN")
+    note: str = Field(default="", description="Human-readable hold note surfaced to merchant")
+
+
 class WriteAuditLogArgs(BaseModel):
     order_id: str
     action_taken: str
@@ -133,6 +139,39 @@ async def notify_3pl(order_id: str, reason: str, urgency: str = "medium") -> dic
         return result
 
 
+@tool(args_schema=HoldFulfillmentArgs)
+async def hold_fulfillment_order(order_id: str, reason: str, note: str = "") -> dict:
+    """Place a FulfillmentOrder hold on a Shopify order to physically stop warehouse fulfillment."""
+    args = {"order_id": order_id, "reason": reason, "note": note}
+    try:
+        if _shopify_client is None:
+            raise RuntimeError("Shopify client not injected")
+        # Get fulfillment orders for this order
+        fulfillment_orders = await _shopify_client.get_fulfillment_orders(order_id)
+        if not fulfillment_orders:
+            result = {"success": False, "error": "No open fulfillment orders found"}
+            _log_call("hold_fulfillment_order", args, result, False)
+            return result
+
+        held = []
+        for fo in fulfillment_orders:
+            fo_id = fo.get("id", "")
+            fo_status = fo.get("status", "")
+            # Only hold open/in-progress fulfillment orders
+            if fo_status in ("OPEN", "IN_PROGRESS"):
+                held_fo = await _shopify_client.hold_fulfillment_order(fo_id, reason, note)
+                held.append(held_fo)
+
+        result = {"success": True, "held_count": len(held), "fulfillment_orders": held}
+        _log_call("hold_fulfillment_order", args, result, True)
+        return result
+    except Exception as exc:
+        logger.error("tool_hold_fulfillment_failed", order_id=order_id, error=str(exc))
+        result = {"success": False, "error": str(exc)}
+        _log_call("hold_fulfillment_order", args, result, False)
+        return result
+
+
 @tool(args_schema=WriteAuditLogArgs)
 async def write_audit_log(order_id: str, action_taken: str, metadata: dict) -> dict:
     """Write a structured audit log entry to PostgreSQL."""
@@ -167,4 +206,4 @@ async def write_audit_log(order_id: str, action_taken: str, metadata: dict) -> d
         return result
 
 
-ALL_TOOLS = [query_order, update_order_tags, notify_3pl, write_audit_log]
+ALL_TOOLS = [query_order, update_order_tags, hold_fulfillment_order, notify_3pl, write_audit_log]

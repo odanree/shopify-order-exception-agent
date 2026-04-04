@@ -22,6 +22,9 @@ class OrderExceptionState(TypedDict):
     # Each entry: {tool, args, result, timestamp_iso, success}
     tool_calls_log: list[dict[str, Any]]
 
+    # Set by execute_action node
+    fulfillment_held: bool | None  # True if FulfillmentOrder hold was applied
+
     # Set by verify_action node
     verification_passed: bool | None
 

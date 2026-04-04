@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     langfuse_host: str = "https://cloud.langfuse.com"
     langfuse_enabled: bool = True
 
+    # Admin
+    admin_api_key: str = ""  # if empty, admin endpoints require no auth (dev only)
+
     # App
     app_env: str = "development"
     log_level: str = "INFO"

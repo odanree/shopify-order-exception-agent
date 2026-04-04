@@ -38,6 +38,15 @@ Given a Shopify order payload, classify the primary exception type into exactly 
 
 Respond with ONLY the category name, nothing else."""
 
+# Maps exception types to Shopify FulfillmentHoldReason enum values.
+# Exception types not present here do NOT trigger a fulfillment hold.
+FULFILLMENT_HOLD_REASONS: dict[str, str] = {
+    "fraud_risk": "HIGH_RISK_OF_FRAUD",
+    "address_invalid": "INCORRECT_ADDRESS",
+    "payment_issue": "AWAITING_PAYMENT",
+    "fulfillment_delay": "UNFULFILLABLE",
+}
+
 ROUTING_MAP = {
     "fraud_risk": "tag_slack_and_3pl",
     "address_invalid": "tag_and_slack",
@@ -154,6 +163,7 @@ async def make_decision(state: OrderExceptionState) -> OrderExceptionState:
 async def execute_action(state: OrderExceptionState) -> OrderExceptionState:
     """Execute the tool calls dictated by routing_decision."""
     from app.agent.tools import (
+        hold_fulfillment_order,
         notify_3pl,
         update_order_tags,
         _tool_calls_ctx,
@@ -170,6 +180,7 @@ async def execute_action(state: OrderExceptionState) -> OrderExceptionState:
     _tool_calls_ctx.set(list(state.get("tool_calls_log", [])))
 
     error = None
+    fulfillment_held = False
 
     try:
         # Always tag the order with the exception type
@@ -179,13 +190,33 @@ async def execute_action(state: OrderExceptionState) -> OrderExceptionState:
         if not tag_result.get("success"):
             raise RuntimeError(f"update_order_tags failed: {tag_result.get('error')}")
 
+        # FulfillmentOrder hold — physically stops the warehouse from shipping
+        hold_reason = FULFILLMENT_HOLD_REASONS.get(exception_type)
+        if hold_reason:
+            hold_note = (
+                f"Held by exception agent: {exception_type.replace('_', ' ')} — "
+                f"routing={routing}"
+            )
+            hold_result = await hold_fulfillment_order.ainvoke(
+                {"order_id": order_id, "reason": hold_reason, "note": hold_note}
+            )
+            fulfillment_held = bool(hold_result.get("success") and hold_result.get("held_count", 0) > 0)
+            if not hold_result.get("success"):
+                # Non-fatal: log warning but continue — tag is the minimum viable action
+                logger.warning(
+                    "fulfillment_hold_failed",
+                    order_id=order_id,
+                    reason=hold_reason,
+                    error=hold_result.get("error"),
+                )
+
         # Slack notification — emitted to pub/sub router (clawhip pattern)
-        # The NotificationWorker daemon handles actual delivery to Slack.
         if routing in ("tag_and_slack", "tag_slack_and_3pl", "escalate"):
             severity = "critical" if routing == "escalate" else "warning"
             msg = (
                 f"Order exception detected: *{exception_type.replace('_', ' ').title()}*\n"
                 f"Routing: `{routing}` | Order: `{order_id}`"
+                + (f" | Fulfillment hold applied" if fulfillment_held else "")
             )
             if _event_router is not None:
                 await _event_router.emit(
@@ -221,6 +252,7 @@ async def execute_action(state: OrderExceptionState) -> OrderExceptionState:
     return {
         **state,
         "tool_calls_log": updated_log,
+        "fulfillment_held": fulfillment_held,
         "error": error,
         "retry_count": retry_count,
     }
