@@ -91,12 +91,23 @@ async def lifespan(app: FastAPI):
         worker.run(settings), name="notification-worker"
     )
 
+    # Start weekly report scheduler
+    from app.services.weekly_report import start_weekly_report_scheduler
+    app.state.weekly_report_task = asyncio.create_task(
+        start_weekly_report_scheduler(app), name="weekly-report-scheduler"
+    )
+
     logger.info("startup_complete", env=settings.app_env, sandbox=settings.is_sandbox)
     yield
 
     app.state.notification_task.cancel()
+    app.state.weekly_report_task.cancel()
     try:
-        await app.state.notification_task
+        await asyncio.gather(
+            app.state.notification_task,
+            app.state.weekly_report_task,
+            return_exceptions=True,
+        )
     except asyncio.CancelledError:
         pass
 
@@ -131,5 +142,46 @@ app.include_router(dashboard.router)
 
 
 @app.get("/health")
-async def health():
-    return {"status": "ok", "service": "shopify-order-exception-agent"}
+async def health(request: Request):
+    from datetime import datetime, timezone
+    from app.services.event_router import NotificationWorker
+
+    checks: dict[str, str] = {}
+
+    # Redis connectivity
+    try:
+        await request.app.state.redis.ping()
+        checks["redis"] = "ok"
+    except Exception as exc:
+        checks["redis"] = f"error: {exc}"
+
+    # Notification worker heartbeat
+    try:
+        raw = await request.app.state.redis.get(NotificationWorker.HEARTBEAT_KEY)
+        if raw:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(raw)).total_seconds()
+            checks["worker"] = "ok" if age < 600 else f"stale:{age:.0f}s"
+        else:
+            checks["worker"] = "not_started"
+    except Exception as exc:
+        checks["worker"] = f"error: {exc}"
+
+    all_ok = all(v == "ok" for v in checks.values())
+
+    if not all_ok:
+        try:
+            import sentry_sdk
+            sentry_sdk.capture_message(
+                "order-exception-agent health degraded",
+                level="critical",
+                extras={"checks": checks},
+            )
+        except ImportError:
+            pass
+
+    status_code = 200 if all_ok else 503
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": "ok" if all_ok else "degraded", "service": "shopify-order-exception-agent", "checks": checks},
+    )
