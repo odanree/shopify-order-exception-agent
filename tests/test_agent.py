@@ -23,6 +23,7 @@ def _make_state(**overrides) -> OrderExceptionState:
         },
         "exception_type": None,
         "routing_decision": None,
+        "verification_passed": None,
         "tool_calls_log": [],
         "error": None,
         "retry_count": 0,
@@ -89,8 +90,6 @@ async def test_execute_action_logs_tool_calls():
     mock_shopify.update_order_tags = AsyncMock(return_value={"add": {"node": {"id": "gid://shopify/Order/12345"}}})
 
     tools._shopify_client = mock_shopify
-    tools._slack_client = AsyncMock()
-    tools._slack_client.send_alert = AsyncMock(return_value=True)
     tools._threpl_client = AsyncMock()
     tools._threpl_client.notify_order_exception = AsyncMock(return_value=True)
 
@@ -103,19 +102,30 @@ async def test_execute_action_logs_tool_calls():
 
 
 @pytest.mark.asyncio
-async def test_dead_letter_written_after_3_retries():
-    """Route to dead_letter when retry_count >= 3 and error is set."""
-    from app.agent.graph import _route_after_action
+async def test_route_to_audit_when_verified():
+    """verification_passed=True should route to audit."""
+    from app.agent.graph import _route_after_verify
 
-    state = _make_state(error="connection refused", retry_count=3)
-    route = _route_after_action(state)
-    assert route == "dead_letter"
+    state = _make_state(verification_passed=True)
+    route = _route_after_verify(state)
+    assert route == "audit"
 
 
 @pytest.mark.asyncio
-async def test_route_to_audit_when_no_error():
-    from app.agent.graph import _route_after_action
+async def test_route_retry_when_verify_fails():
+    """verification_passed=False with retries remaining should cycle back to action."""
+    from app.agent.graph import _route_after_verify
 
-    state = _make_state(error=None, retry_count=0)
-    route = _route_after_action(state)
-    assert route == "audit"
+    state = _make_state(verification_passed=False, retry_count=0)
+    route = _route_after_verify(state)
+    assert route == "action"
+
+
+@pytest.mark.asyncio
+async def test_dead_letter_after_verify_max_retries():
+    """verification_passed=False at retry_count >= 2 should route to dead_letter."""
+    from app.agent.graph import _route_after_verify
+
+    state = _make_state(verification_passed=False, retry_count=2)
+    route = _route_after_verify(state)
+    assert route == "dead_letter"

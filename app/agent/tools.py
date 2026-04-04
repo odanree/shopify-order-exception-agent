@@ -18,7 +18,6 @@ logger = structlog.get_logger()
 # Injected service references (set once at app startup)
 # ---------------------------------------------------------------------------
 _shopify_client = None
-_slack_client = None
 _threpl_client = None
 _db_factory = None
 
@@ -28,10 +27,9 @@ _tool_calls_ctx: contextvars.ContextVar[list[dict]] = contextvars.ContextVar(
 )
 
 
-def inject_tool_dependencies(shopify, slack, threpl, db_factory):
-    global _shopify_client, _slack_client, _threpl_client, _db_factory
+def inject_tool_dependencies(shopify, threpl, db_factory):
+    global _shopify_client, _threpl_client, _db_factory
     _shopify_client = shopify
-    _slack_client = slack
     _threpl_client = threpl
     _db_factory = db_factory
 
@@ -67,13 +65,6 @@ class Notify3PLArgs(BaseModel):
     order_id: str
     reason: str
     urgency: str = Field(default="medium", description="low | medium | high")
-
-
-class CreateSlackAlertArgs(BaseModel):
-    channel: str
-    order_id: str
-    message: str
-    severity: str = Field(default="info", description="info | warning | critical")
 
 
 class WriteAuditLogArgs(BaseModel):
@@ -142,26 +133,6 @@ async def notify_3pl(order_id: str, reason: str, urgency: str = "medium") -> dic
         return result
 
 
-@tool(args_schema=CreateSlackAlertArgs)
-async def create_slack_alert(
-    channel: str, order_id: str, message: str, severity: str = "info"
-) -> dict:
-    """Send a Slack alert for an order exception."""
-    args = {"channel": channel, "order_id": order_id, "message": message, "severity": severity}
-    try:
-        if _slack_client is None:
-            raise RuntimeError("Slack client not injected")
-        success = await _slack_client.send_alert(channel, order_id, message, severity)
-        result = {"success": success}
-        _log_call("create_slack_alert", args, result, success)
-        return result
-    except Exception as exc:
-        logger.error("tool_slack_alert_failed", order_id=order_id, error=str(exc))
-        result = {"success": False, "error": str(exc)}
-        _log_call("create_slack_alert", args, result, False)
-        return result
-
-
 @tool(args_schema=WriteAuditLogArgs)
 async def write_audit_log(order_id: str, action_taken: str, metadata: dict) -> dict:
     """Write a structured audit log entry to PostgreSQL."""
@@ -196,4 +167,4 @@ async def write_audit_log(order_id: str, action_taken: str, metadata: dict) -> d
         return result
 
 
-ALL_TOOLS = [query_order, update_order_tags, notify_3pl, create_slack_alert, write_audit_log]
+ALL_TOOLS = [query_order, update_order_tags, notify_3pl, write_audit_log]

@@ -22,6 +22,9 @@ class OrderExceptionState(TypedDict):
     # Each entry: {tool, args, result, timestamp_iso, success}
     tool_calls_log: list[dict[str, Any]]
 
+    # Set by verify_action node
+    verification_passed: bool | None
+
     # Error tracking for dead-letter routing
     error: str | None
     retry_count: int

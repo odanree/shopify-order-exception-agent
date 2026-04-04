@@ -1,3 +1,4 @@
+import asyncio
 import structlog
 from contextlib import asynccontextmanager
 
@@ -39,7 +40,9 @@ async def lifespan(app: FastAPI):
     from app.services.idempotency import IdempotencyService
     from app.services.slack_client import SlackClient
     from app.services.threpl_client import ThreePLClient
+    from app.services.event_router import EventRouter, NotificationWorker
     from app.agent.tools import inject_tool_dependencies
+    from app.agent.nodes import inject_event_router
 
     app.state.shopify = ShopifyGraphQLClient(
         domain=settings.active_shopify_domain,
@@ -53,15 +56,29 @@ async def lifespan(app: FastAPI):
         api_key=settings.threpl_api_key,
     )
 
+    app.state.event_router = EventRouter(app.state.redis)
+    inject_event_router(app.state.event_router)
+
     inject_tool_dependencies(
         shopify=app.state.shopify,
-        slack=app.state.slack,
         threpl=app.state.threpl,
         db_factory=AsyncSessionLocal,
     )
 
+    # Start the notification worker as a background asyncio task
+    worker = NotificationWorker(app.state.redis, app.state.slack)
+    app.state.notification_task = asyncio.create_task(
+        worker.run(settings), name="notification-worker"
+    )
+
     logger.info("startup_complete", env=settings.app_env, sandbox=settings.is_sandbox)
     yield
+
+    app.state.notification_task.cancel()
+    try:
+        await app.state.notification_task
+    except asyncio.CancelledError:
+        pass
 
     await app.state.shopify.close()
     await app.state.redis.aclose()

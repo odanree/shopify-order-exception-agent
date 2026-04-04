@@ -13,6 +13,17 @@ from app.config import get_settings
 logger = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
+# Event router (set by inject_event_router() in main.py)
+# ---------------------------------------------------------------------------
+_event_router = None
+
+
+def inject_event_router(router) -> None:
+    global _event_router
+    _event_router = router
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -143,7 +154,6 @@ async def make_decision(state: OrderExceptionState) -> OrderExceptionState:
 async def execute_action(state: OrderExceptionState) -> OrderExceptionState:
     """Execute the tool calls dictated by routing_decision."""
     from app.agent.tools import (
-        create_slack_alert,
         notify_3pl,
         update_order_tags,
         _tool_calls_ctx,
@@ -169,21 +179,24 @@ async def execute_action(state: OrderExceptionState) -> OrderExceptionState:
         if not tag_result.get("success"):
             raise RuntimeError(f"update_order_tags failed: {tag_result.get('error')}")
 
-        # Slack notification
+        # Slack notification — emitted to pub/sub router (clawhip pattern)
+        # The NotificationWorker daemon handles actual delivery to Slack.
         if routing in ("tag_and_slack", "tag_slack_and_3pl", "escalate"):
             severity = "critical" if routing == "escalate" else "warning"
             msg = (
                 f"Order exception detected: *{exception_type.replace('_', ' ').title()}*\n"
                 f"Routing: `{routing}` | Order: `{order_id}`"
             )
-            await create_slack_alert.ainvoke(
-                {
-                    "channel": settings.slack_default_channel,
-                    "order_id": order_id,
-                    "message": msg,
-                    "severity": severity,
-                }
-            )
+            if _event_router is not None:
+                await _event_router.emit(
+                    "order_exception_alert",
+                    {
+                        "channel": settings.slack_default_channel,
+                        "order_id": order_id,
+                        "message": msg,
+                        "severity": severity,
+                    },
+                )
 
         # 3PL notification
         if routing in ("tag_and_3pl", "tag_slack_and_3pl"):
@@ -242,6 +255,69 @@ async def record_audit(state: OrderExceptionState) -> OrderExceptionState:
         processing_time_ms=processing_time_ms,
     )
     return state
+
+
+async def verify_action(state: OrderExceptionState) -> OrderExceptionState:
+    """Re-query Shopify to confirm the exception tag was actually applied.
+
+    If execute_action itself raised an error, skip verification — the error routing
+    will handle retry/dead-letter. Otherwise, verify the tag is present and retry
+    execute_action up to 2 times before dead-lettering.
+    """
+    from app.agent.tools import _shopify_client
+
+    order_id = state["order_id"]
+    exception_type = state.get("exception_type", "unknown")
+    expected_tag = EXCEPTION_TAGS.get(exception_type, "exception:unknown")
+
+    # If execute_action failed outright, skip verification and let routing handle it
+    if state.get("error"):
+        return {**state, "verification_passed": False}
+
+    verification_passed = False
+    error = None
+
+    try:
+        if _shopify_client is None:
+            raise RuntimeError("Shopify client not injected")
+
+        order_data = await _shopify_client.get_order(order_id)
+        # Shopify GraphQL returns tags as a list of strings
+        current_tags = order_data.get("tags") or []
+        if isinstance(current_tags, str):
+            current_tags = [t.strip() for t in current_tags.split(",") if t.strip()]
+
+        verification_passed = expected_tag in current_tags
+
+        if not verification_passed:
+            logger.warning(
+                "verify_action_tag_missing",
+                order_id=order_id,
+                expected_tag=expected_tag,
+                current_tags=current_tags,
+                retry_count=state.get("retry_count", 0),
+            )
+    except Exception as exc:
+        error = str(exc)
+        logger.error("verify_action_query_failed", order_id=order_id, error=error)
+
+    retry_count = state.get("retry_count", 0)
+    if not verification_passed:
+        retry_count += 1
+        error = error or f"verification_failed: tag '{expected_tag}' not present in Shopify"
+
+    logger.info(
+        "verify_action_complete",
+        order_id=order_id,
+        verification_passed=verification_passed,
+        retry_count=retry_count,
+    )
+    return {
+        **state,
+        "verification_passed": verification_passed,
+        "retry_count": retry_count,
+        "error": error if not verification_passed else state.get("error"),
+    }
 
 
 async def handle_dead_letter(state: OrderExceptionState) -> OrderExceptionState:
