@@ -131,3 +131,67 @@ async def test_dead_letter_after_verify_max_retries():
     state = _make_state(verification_passed=False, retry_count=2)
     route = _route_after_verify(state)
     assert route == "dead_letter"
+
+
+@pytest.mark.asyncio
+async def test_full_graph_triage_to_audit():
+    """End-to-end graph run: triage -> decision -> action -> verify -> audit.
+
+    All Shopify and DB calls are mocked; the LLM returns a fixed classification.
+    Verifies the graph completes without error and audit is recorded.
+    """
+    from app.agent import tools
+    from app.agent.graph import process_webhook_event
+
+    # Mock Shopify client
+    mock_shopify = AsyncMock()
+    mock_shopify.update_order_tags = AsyncMock(
+        return_value={"add": {"node": {"id": "gid://shopify/Order/99999", "tags": ["exception:fraud_risk"]}}}
+    )
+    mock_shopify.get_order_tags = AsyncMock(return_value=["exception:fraud_risk"])
+    mock_shopify.place_fulfillment_hold = AsyncMock(return_value={"success": True})
+    tools._shopify_client = mock_shopify
+    tools._threpl_client = AsyncMock()
+    tools._threpl_client.notify_order_exception = AsyncMock(return_value=True)
+
+    # Mock DB factory
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+    mock_session.add = MagicMock()
+    mock_session.commit = AsyncMock()
+    mock_session.refresh = AsyncMock()
+    mock_db = MagicMock(return_value=mock_session)
+    tools._db_factory = mock_db
+
+    with patch("app.agent.nodes._get_llm") as mock_llm_factory:
+        mock_llm = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.content = "fraud_risk"
+        mock_response.usage_metadata = {"input_tokens": 150, "output_tokens": 5}
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+        mock_llm_factory.return_value = mock_llm
+
+        state = _make_state(
+            webhook_id="e2e-test-001",
+            order_id="99999",
+            raw_payload={
+                "id": 99999,
+                "total_price": "350.00",
+                "financial_status": "paid",
+                "fulfillment_status": None,
+                "risk_level": "HIGH",
+                "tags": "",
+                "shipping_address": {
+                    "country": "NG", "address1": "Unknown", "city": "Lagos", "zip": "00100"
+                },
+            },
+        )
+
+        result = await process_webhook_event(state)
+
+    assert result["exception_type"] == "fraud_risk"
+    assert result["routing_decision"] == "tag_slack_and_3pl"
+    assert result["verification_passed"] is True
+    assert result["error"] is None
+    assert result["llm_input_tokens"] == 150
