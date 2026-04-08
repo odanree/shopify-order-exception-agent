@@ -10,6 +10,22 @@ the dead letter queue. This runbook covers how to inspect, retry, and resolve DL
 
 ---
 
+## Environment variables
+
+See `docs/runbooks/env.md` (gitignored) for real values.
+
+| Variable | Description |
+|----------|-------------|
+| `$PROD_HOST` | Production server hostname or IP |
+| `$PROD_USER` | SSH user (e.g. `root`) |
+| `$SERVICE_URL` | Public HTTPS URL of the agent |
+| `$DB_USER` | PostgreSQL app user |
+| `$DB_NAME` | PostgreSQL database name |
+| `$ORDER_AGENT_CONTAINER` | Docker container name |
+| `$POSTGRES_CONTAINER` | Docker postgres container name |
+
+---
+
 ## When to use this
 
 - Dashboard shows DLQ events in the **Dead Letter Queue** panel
@@ -23,13 +39,13 @@ the dead letter queue. This runbook covers how to inspect, retry, and resolve DL
 
 **Via dashboard:**
 ```
-https://shopify-order.danhle.net/dashboard
+$SERVICE_URL/dashboard
 ```
 Scroll to the **Dead Letter Queue** panel. Each row shows order ID, error, retry count, and queued time.
 
 **Via API:**
 ```bash
-curl -s https://shopify-order.danhle.net/api/dlq | python -m json.tool
+curl -s $SERVICE_URL/api/dlq | python -m json.tool
 ```
 
 Response fields:
@@ -44,7 +60,7 @@ Response fields:
 ## Step 2 — Diagnose the failure
 
 ```bash
-ssh root@65.108.243.192 "docker logs shopify-order-agent --tail 100 2>&1 | grep -A10 '<order_id>'"
+ssh $PROD_USER@$PROD_HOST "docker logs $ORDER_AGENT_CONTAINER --tail 100 2>&1 | grep -A10 '<order_id>'"
 ```
 
 Common failure causes:
@@ -61,7 +77,7 @@ Common failure causes:
 
 **Via API:**
 ```bash
-curl -s -X POST https://shopify-order.danhle.net/api/dlq/<event_id>/retry | python -m json.tool
+curl -s -X POST $SERVICE_URL/api/dlq/<event_id>/retry | python -m json.tool
 ```
 
 The retry re-injects the original webhook payload into the graph with a fresh run ID.
@@ -80,7 +96,7 @@ If the event should be discarded (e.g. test order, duplicate, no action needed):
 
 **Via API:**
 ```bash
-curl -s -X POST https://shopify-order.danhle.net/api/dlq/<event_id>/resolve | python -m json.tool
+curl -s -X POST $SERVICE_URL/api/dlq/<event_id>/resolve | python -m json.tool
 ```
 
 This sets `resolved_at` without reprocessing. The event disappears from the dashboard panel.
@@ -90,11 +106,11 @@ This sets `resolved_at` without reprocessing. The event disappears from the dash
 ## Step 5 — Verify resolution
 
 ```bash
-curl -s https://shopify-order.danhle.net/api/dlq | python -m json.tool
+curl -s $SERVICE_URL/api/dlq | python -m json.tool
 # Event should no longer appear
 
 # If retried, verify audit record was created
-ssh root@65.108.243.192 "docker exec portfolio-postgres psql -U portfolio_user -d order_exceptions \
+ssh $PROD_USER@$PROD_HOST "docker exec $POSTGRES_CONTAINER psql -U $DB_USER -d $DB_NAME \
   -c \"SELECT order_id, routing_type, created_at FROM audit_logs ORDER BY created_at DESC LIMIT 3;\""
 ```
 
@@ -106,7 +122,7 @@ If the DLQ is flooded with events from a bad deploy or misconfiguration:
 
 ```bash
 # Resolve all unresolved events (use with caution)
-ssh root@65.108.243.192 "docker exec portfolio-postgres psql -U portfolio_user -d order_exceptions \
+ssh $PROD_USER@$PROD_HOST "docker exec $POSTGRES_CONTAINER psql -U $DB_USER -d $DB_NAME \
   -c \"UPDATE dead_letter_events SET resolved_at = NOW() WHERE resolved_at IS NULL;\""
 ```
 

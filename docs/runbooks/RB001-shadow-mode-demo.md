@@ -11,9 +11,25 @@ Shopify mutations (fulfillment holds, tags). Slack messages are prefixed `[SHADO
 
 ---
 
+## Environment variables
+
+See `docs/runbooks/env.md` (gitignored) for real values.
+
+| Variable | Description |
+|----------|-------------|
+| `$PROD_HOST` | Production server hostname or IP |
+| `$PROD_USER` | SSH user (e.g. `root`) |
+| `$SERVICE_URL` | Public HTTPS URL of the agent |
+| `$DB_USER` | PostgreSQL app user |
+| `$DB_NAME` | PostgreSQL database name |
+| `$ORDER_AGENT_CONTAINER` | Docker container name |
+| `$POSTGRES_CONTAINER` | Docker postgres container name |
+
+---
+
 ## Prerequisites
 
-- Agent deployed and reachable at `https://shopify-order.danhle.net`
+- Agent deployed and reachable at `$SERVICE_URL`
 - `AGENT_MODE=shadow` set in the container (verify below)
 - `SLACK_WEBHOOK_URL` set so notifications fire
 - `pip install httpx` in your local env
@@ -23,7 +39,7 @@ Shopify mutations (fulfillment holds, tags). Slack messages are prefixed `[SHADO
 ## Step 1 — Verify shadow mode is active
 
 ```bash
-ssh root@65.108.243.192 "docker exec shopify-order-agent env | grep AGENT_MODE"
+ssh $PROD_USER@$PROD_HOST "docker exec $ORDER_AGENT_CONTAINER env | grep AGENT_MODE"
 # Expected: AGENT_MODE=shadow
 ```
 
@@ -41,10 +57,10 @@ AGENT_MODE: shadow
 cd shopify-order-exception-agent
 
 # All 6 scenarios
-python scripts/seed_demo.py --url https://shopify-order.danhle.net
+python scripts/seed_demo.py --url $SERVICE_URL
 
 # Single scenario
-python scripts/seed_demo.py --url https://shopify-order.danhle.net --scenario fraud
+python scripts/seed_demo.py --url $SERVICE_URL --scenario fraud
 ```
 
 **Scenarios:**
@@ -53,7 +69,7 @@ python scripts/seed_demo.py --url https://shopify-order.danhle.net --scenario fr
 |-----|-------------|-----------------|
 | `fraud` | High-risk score, international billing | `tag_slack_and_3pl` or `escalate` |
 | `address` | Missing city/zip | `tag_and_slack` |
-| `high_value` | $1,450 order (>$500 threshold) | `require_manual_review` |
+| `high_value` | $1,450 order (>$500 threshold → manual review) | `require_manual_review` |
 | `payment` | payment_pending status | `tag_and_slack` |
 | `fulfillment_delay` | Stuck unfulfilled | `tag_and_slack` |
 | `unknown` | Minimal payload, fallback test | `no_action` or `tag_and_slack` |
@@ -79,7 +95,7 @@ Reason: High fraud risk score...
 ## Step 4 — Verify dashboard
 
 ```
-https://shopify-order.danhle.net/dashboard
+$SERVICE_URL/dashboard
 ```
 
 Check:
@@ -93,7 +109,7 @@ Check:
 ## Step 5 — Verify audit records
 
 ```bash
-ssh root@65.108.243.192 "docker exec portfolio-postgres psql -U portfolio_user -d order_exceptions \
+ssh $PROD_USER@$PROD_HOST "docker exec $POSTGRES_CONTAINER psql -U $DB_USER -d $DB_NAME \
   -c \"SELECT order_id, routing_type, shadowed, input_tokens, cost_usd FROM audit_logs ORDER BY created_at DESC LIMIT 6;\""
 ```
 
@@ -107,5 +123,5 @@ Expected: `shadowed = true` on all recent rows, `input_tokens` non-null.
 |---------|-------|-----|
 | No Slack messages | `SLACK_WEBHOOK_URL` not set or `AGENT_MODE` not shadow | Check env vars |
 | Messages not prefixed `[SHADOW]` | `AGENT_MODE` not set to `shadow` | Add env var, restart |
-| Seed returns non-200 | Service down or wrong URL | Check `/health` endpoint |
-| No audit rows | DB session issue or graph error | Check `docker logs shopify-order-agent` |
+| Seed returns non-200 | Service down or wrong URL | Check `$SERVICE_URL/health` |
+| No audit rows | DB session issue or graph error | Check `docker logs $ORDER_AGENT_CONTAINER` |
