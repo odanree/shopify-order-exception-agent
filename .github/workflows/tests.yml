@@ -27,7 +27,7 @@ jobs:
         run: pytest --tb=short -q
         env:
           # Tests use fakeredis + sqlite - no real services needed
-          DATABASE_URL: sqlite+aiosqlite:///:memory:
-          REDIS_URL: redis://localhost:6379/0
-          SHOPIFY_WEBHOOK_SECRET: test-secret
-          ANTHROPIC_API_KEY: sk-ant-test
+          DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+          REDIS_URL: "redis://localhost:6379/0"
+          SHOPIFY_WEBHOOK_SECRET: "test-secret"
+          ANTHROPIC_API_KEY: "sk-ant-test"
