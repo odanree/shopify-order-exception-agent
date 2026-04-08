@@ -19,7 +19,7 @@ load_dotenv()
 
 API_VERSION = os.getenv("SHOPIFY_API_VERSION", "2024-01")
 
-# topic → path suffix on our FastAPI app
+# topic -> path suffix on our FastAPI app
 TOPICS = {
     "orders/create": "/api/webhooks/orders/create",
     "orders/updated": "/api/webhooks/orders/updated",
@@ -76,20 +76,20 @@ def main(endpoint_url: str, dry_run: bool) -> None:
         for topic, path in TOPICS.items():
             address = f"{endpoint_url}{path}"
             if address in existing_addresses:
-                print(f"  [SKIP]     {topic} → already registered at {address}")
+                print(f"  [SKIP]     {topic} -> already registered at {address}")
                 continue
 
             if dry_run:
-                print(f"  [DRY RUN]  {topic} → would register at {address}")
+                print(f"  [DRY RUN]  {topic} -> would register at {address}")
                 continue
 
             result = register_webhook(client, domain, token, topic, address)
             if result.get("status") == "already_exists":
-                print(f"  [SKIP]     {topic} → {address} (422 already exists)")
+                print(f"  [SKIP]     {topic} -> {address} (422 already exists)")
             else:
                 webhook_id = result.get("id")
                 secret = result.get("api_client_id", "<check Shopify dashboard>")
-                print(f"  [CREATED]  {topic} → {address} (id={webhook_id})")
+                print(f"  [CREATED]  {topic} -> {address} (id={webhook_id})")
                 print(f"             Copy HMAC secret to SHOPIFY_WEBHOOK_SECRET in .env")
                 print(f"             Webhook ID: {webhook_id}")
 
