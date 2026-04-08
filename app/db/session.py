@@ -1,3 +1,4 @@
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import get_settings
@@ -33,6 +34,13 @@ async def init_db() -> None:
 
     async with async_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Additive migrations — safe to run repeatedly on existing DBs
+        for stmt in [
+            "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS input_tokens INTEGER",
+            "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS output_tokens INTEGER",
+            "ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS cost_usd DOUBLE PRECISION",
+        ]:
+            await conn.execute(text(stmt))
 
 
 async def get_db():

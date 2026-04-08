@@ -31,6 +31,10 @@ class OrderExceptionState(TypedDict):
     # Set when agent_mode == "shadow": mutations skipped, full graph still runs
     shadowed: bool | None
 
+    # Token usage from LLM triage call
+    llm_input_tokens: int | None
+    llm_output_tokens: int | None
+
     # Error tracking for dead-letter routing
     error: str | None
     retry_count: int

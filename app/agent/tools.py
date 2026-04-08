@@ -182,6 +182,13 @@ async def write_audit_log(order_id: str, action_taken: str, metadata: dict) -> d
         from app.models.db import AuditLog
 
         async with _db_factory() as session:
+            input_tokens = metadata.get("input_tokens")
+            output_tokens = metadata.get("output_tokens")
+            # claude-sonnet-4-6: $3/MTok input, $15/MTok output
+            cost_usd = None
+            if input_tokens is not None and output_tokens is not None:
+                cost_usd = (input_tokens * 3.0 + output_tokens * 15.0) / 1_000_000
+
             record = AuditLog(
                 webhook_id=metadata.get("webhook_id", "unknown"),
                 order_id=order_id,
@@ -191,6 +198,9 @@ async def write_audit_log(order_id: str, action_taken: str, metadata: dict) -> d
                 tool_calls=metadata.get("tool_calls_log"),
                 metadata_=metadata,
                 processing_time_ms=metadata.get("processing_time_ms"),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost_usd,
             )
             session.add(record)
             await session.commit()

@@ -48,10 +48,24 @@ async def get_stats(request: Request):
             )
         ).all()
 
+        token_row = (
+            await session.execute(
+                select(
+                    func.sum(AuditLog.input_tokens),
+                    func.sum(AuditLog.output_tokens),
+                    func.sum(AuditLog.cost_usd),
+                ).where(AuditLog.created_at >= seven_days_ago)
+            )
+        ).one()
+
     total = total_7d or 0
     success_rate = round((total - (dead_letters or 0)) / max(total, 1) * 100, 1)
-    # Estimate ROI: each automated exception triage saves ~8 minutes of manual review
     hours_saved = round(total * 8 / 60, 1)
+
+    total_input_tokens = int(token_row[0] or 0)
+    total_output_tokens = int(token_row[1] or 0)
+    total_cost_usd = float(token_row[2] or 0.0)
+    avg_cost_per_event = round(total_cost_usd / max(total, 1), 6)
 
     return {
         "window": "7d",
@@ -61,6 +75,10 @@ async def get_stats(request: Request):
         "avg_processing_ms": round(avg_ms or 0),
         "dead_letter_queue": dead_letters or 0,
         "hours_saved_estimate": hours_saved,
+        "total_input_tokens": total_input_tokens,
+        "total_output_tokens": total_output_tokens,
+        "total_cost_usd": round(total_cost_usd, 6),
+        "avg_cost_per_event_usd": avg_cost_per_event,
         "by_exception_type": [
             {"type": r[0] or "unknown", "count": r[1]} for r in by_type_rows
         ],
@@ -143,6 +161,8 @@ async function load() {
     document.getElementById('last-updated').textContent =
       'Last updated: ' + new Date().toLocaleTimeString();
     document.getElementById('shadow-banner').style.display = d.shadow_mode ? 'block' : 'none';
+    const fmtTokens = n => n >= 1000 ? (n/1000).toFixed(1)+'k' : String(n);
+    const fmtCost = n => n < 0.01 ? '$' + n.toFixed(4) : '$' + n.toFixed(3);
     document.getElementById('cards').innerHTML = `
       <div class="card blue">
         <div class="label">Events Processed (7d)</div>
@@ -163,6 +183,16 @@ async function load() {
         <div class="label">Est. Hours Saved</div>
         <div class="value">${d.hours_saved_estimate}h</div>
         <div class="sub">vs manual triage @ 8 min/event</div>
+      </div>
+      <div class="card yellow">
+        <div class="label">LLM Cost (7d)</div>
+        <div class="value">${fmtCost(d.total_cost_usd)}</div>
+        <div class="sub">${fmtCost(d.avg_cost_per_event_usd)} avg per event</div>
+      </div>
+      <div class="card">
+        <div class="label">Tokens Used (7d)</div>
+        <div class="value">${fmtTokens(d.total_input_tokens + d.total_output_tokens)}</div>
+        <div class="sub">${fmtTokens(d.total_input_tokens)} in · ${fmtTokens(d.total_output_tokens)} out</div>
       </div>`;
     document.getElementById('type-rows').innerHTML = d.by_exception_type.length
       ? d.by_exception_type.map(e => `<tr>

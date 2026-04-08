@@ -140,16 +140,29 @@ async def triage_event(state: OrderExceptionState) -> OrderExceptionState:
         exception_type = response.content.strip().lower()
         if exception_type not in ROUTING_MAP:
             exception_type = "unknown"
+        usage = response.usage_metadata or {}
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
         if lf_handler:
             lf_handler.flush()
     except Exception as exc:
         logger.error("triage_llm_failed", order_id=order_id, error=str(exc))
         exception_type = "unknown"
+        input_tokens = 0
+        output_tokens = 0
 
-    logger.info("triage_complete", order_id=order_id, exception_type=exception_type)
+    logger.info(
+        "triage_complete",
+        order_id=order_id,
+        exception_type=exception_type,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+    )
     return {
         **state,
         "exception_type": exception_type,
+        "llm_input_tokens": input_tokens,
+        "llm_output_tokens": output_tokens,
         "messages": state.get("messages", []),
     }
 
@@ -375,6 +388,8 @@ async def record_audit(state: OrderExceptionState) -> OrderExceptionState:
                 "tool_calls_log": state.get("tool_calls_log", []),
                 "processing_time_ms": processing_time_ms,
                 "error": state.get("error"),
+                "input_tokens": state.get("llm_input_tokens"),
+                "output_tokens": state.get("llm_output_tokens"),
             },
         }
     )
