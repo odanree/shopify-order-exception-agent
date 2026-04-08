@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.config import get_settings
-from app.db.session import init_db, AsyncSessionLocal
+from app.db.session import init_db
 
 
 logger = structlog.get_logger()
@@ -54,6 +54,7 @@ async def lifespan(app: FastAPI):
 
     # Database
     await init_db()
+    from app.db.session import AsyncSessionLocal  # import after init_db sets it
 
     # Service clients
     from app.services.shopify_client import ShopifyGraphQLClient

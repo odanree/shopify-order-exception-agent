@@ -24,12 +24,14 @@ RETRY_COOLDOWN_MINUTES = 15
 
 
 async def process_pending_dlq_events():
-    from app.db.session import AsyncSessionLocal, init_db
+    from app.db.session import init_db
     from app.models.db import DeadLetterEvent
     from app.agent.graph import process_webhook_event
     from app.agent.state import OrderExceptionState
 
     await init_db()
+
+    from app.db.session import AsyncSessionLocal  # import after init_db sets it
 
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=RETRY_COOLDOWN_MINUTES)
 
@@ -111,7 +113,7 @@ async def main():
     )
     slack = SlackClient(settings.slack_webhook_url)
     threpl = ThreePLClient(settings.threpl_webhook_url, settings.threpl_api_key)
-    inject_tool_dependencies(shopify=shopify, slack=slack, threpl=threpl, db_factory=AsyncSessionLocal)
+    inject_tool_dependencies(shopify=shopify, threpl=threpl, db_factory=AsyncSessionLocal)
 
     while True:
         try:

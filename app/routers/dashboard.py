@@ -11,7 +11,6 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy import func, select
 
-from app.db.session import AsyncSessionLocal
 from app.models.db import AuditLog, DeadLetterEvent
 
 logger = structlog.get_logger()
@@ -26,6 +25,7 @@ async def get_stats(request: Request):
     settings = get_settings()
     seven_days_ago = datetime.now(timezone.utc) - _SEVEN_DAYS
 
+    from app.db.session import AsyncSessionLocal
     async with AsyncSessionLocal() as session:
         total_7d = await session.scalar(
             select(func.count(AuditLog.id)).where(AuditLog.created_at >= seven_days_ago)

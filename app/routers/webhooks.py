@@ -60,7 +60,7 @@ async def order_created(
     order_id = _extract_order_id(payload)
 
     if not await _check_kill_switch(request):
-        logger.warning("kill_switch_active", event="orders/create", order_id=order_id)
+        logger.warning("kill_switch_active", topic="orders/create", order_id=order_id)
         return {"status": "accepted", "action": "suppressed_kill_switch"}
 
     if not await idempotency.mark_processed(webhook_id):
@@ -84,7 +84,7 @@ async def order_created(
     }
 
     background_tasks.add_task(_run_agent, state)
-    logger.info("webhook_accepted", event="orders/create", order_id=order_id)
+    logger.info("webhook_accepted", topic="orders/create", order_id=order_id)
     return {"status": "accepted", "webhook_id": webhook_id, "order_id": order_id}
 
 
@@ -99,7 +99,7 @@ async def order_updated(
     order_id = _extract_order_id(payload)
 
     if not await _check_kill_switch(request):
-        logger.warning("kill_switch_active", event="orders/updated", order_id=order_id)
+        logger.warning("kill_switch_active", topic="orders/updated", order_id=order_id)
         return {"status": "accepted", "action": "suppressed_kill_switch"}
 
     if not await idempotency.mark_processed(webhook_id):
@@ -123,7 +123,7 @@ async def order_updated(
     }
 
     background_tasks.add_task(_run_agent, state)
-    logger.info("webhook_accepted", event="orders/updated", order_id=order_id)
+    logger.info("webhook_accepted", topic="orders/updated", order_id=order_id)
     return {"status": "accepted", "webhook_id": webhook_id, "order_id": order_id}
 
 
@@ -138,7 +138,7 @@ async def fulfillment_updated(
     order_id = str(payload.get("order_id", "unknown"))
 
     if not await _check_kill_switch(request):
-        logger.warning("kill_switch_active", event="fulfillment_events/create", order_id=order_id)
+        logger.warning("kill_switch_active", topic="fulfillment_events/create", order_id=order_id)
         return {"status": "accepted", "action": "suppressed_kill_switch"}
 
     if not await idempotency.mark_processed(webhook_id):
@@ -162,5 +162,5 @@ async def fulfillment_updated(
     }
 
     background_tasks.add_task(_run_agent, state)
-    logger.info("webhook_accepted", event="fulfillment_events/create", order_id=order_id)
+    logger.info("webhook_accepted", topic="fulfillment_events/create", order_id=order_id)
     return {"status": "accepted", "webhook_id": webhook_id, "order_id": order_id}

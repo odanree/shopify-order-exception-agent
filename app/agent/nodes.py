@@ -202,7 +202,7 @@ async def execute_action(state: OrderExceptionState) -> OrderExceptionState:
     )
     settings = get_settings()
 
-    # Shadow mode: log the full intended action but skip all write mutations
+    # Shadow mode: skip Shopify mutations but still send Slack notifications
     if settings.agent_mode == "shadow":
         logger.info(
             "execute_action_shadowed",
@@ -212,6 +212,31 @@ async def execute_action(state: OrderExceptionState) -> OrderExceptionState:
             would_apply_tag=exception_tag,
             would_hold=routing in FULFILLMENT_HOLD_REASONS,
         )
+        # Still emit Slack so the demo shows the full notification flow
+        if routing in ("tag_and_slack", "tag_slack_and_3pl", "escalate"):
+            severity = "critical" if routing == "escalate" else "warning"
+            msg = (
+                f"[SHADOW] Order exception detected: *{exception_type.replace('_', ' ').title()}*\n"
+                f"Routing: `{routing}` | Order: `{order_id}`\n"
+                f"_Would apply tag:_ `{exception_tag}`"
+                + (f" | _Would hold fulfillment_" if routing in FULFILLMENT_HOLD_REASONS else "")
+            )
+            if _event_router is not None:
+                await _event_router.emit(
+                    "order_exception_alert",
+                    {"channel": settings.slack_default_channel, "order_id": order_id, "message": msg, "severity": severity},
+                )
+        elif routing == "require_manual_review":
+            order_total = state["raw_payload"].get("total_price", "0.00")
+            msg = (
+                f"[SHADOW] 🔴 *Manual Review Required* — Order `{order_id}`\n"
+                f"Order total: *${order_total}* | Exception: `{exception_type}`"
+            )
+            if _event_router is not None:
+                await _event_router.emit(
+                    "order_exception_alert",
+                    {"channel": settings.slack_default_channel, "order_id": order_id, "message": msg, "severity": "critical"},
+                )
         return {
             **state,
             "shadowed": True,
@@ -380,6 +405,11 @@ async def verify_action(state: OrderExceptionState) -> OrderExceptionState:
     if state.get("error"):
         return {**state, "verification_passed": False}
 
+    # Shadow mode: skip verification — no real mutations were made
+    if state.get("shadowed"):
+        logger.info("verify_action_skipped_shadow", order_id=order_id)
+        return {**state, "verification_passed": True}
+
     verification_passed = False
     error = None
 
@@ -388,6 +418,9 @@ async def verify_action(state: OrderExceptionState) -> OrderExceptionState:
             raise RuntimeError("Shopify client not injected")
 
         order_data = await _shopify_client.get_order(order_id)
+        if order_data is None:
+            raise RuntimeError(f"Order {order_id} not found in Shopify")
+
         # Shopify GraphQL returns tags as a list of strings
         current_tags = order_data.get("tags") or []
         if isinstance(current_tags, str):
