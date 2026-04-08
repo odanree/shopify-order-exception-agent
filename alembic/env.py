@@ -9,10 +9,12 @@ from app.db.base import Base
 import app.models.db  # noqa: F401 — registers models with Base.metadata
 
 config = context.config
-fileConfig(config.config_file_name)
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
 
-# Override DB URL from environment (production uses DATABASE_URL env var)
-db_url = os.getenv("DATABASE_URL")
+# Override DB URL from environment — must happen AFTER fileConfig so ini values
+# don't clobber what we set here (production uses DATABASE_URL env var)
+db_url = os.environ.get("DATABASE_URL")
 if db_url:
     config.set_main_option("sqlalchemy.url", db_url)
 
