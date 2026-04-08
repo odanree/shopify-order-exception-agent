@@ -26,7 +26,7 @@ jobs:
       - name: Run tests
         run: pytest --tb=short -q
         env:
-          # Tests use fakeredis + sqlite — no real services needed
+          # Tests use fakeredis + sqlite - no real services needed
           DATABASE_URL: sqlite+aiosqlite:///:memory:
           REDIS_URL: redis://localhost:6379/0
           SHOPIFY_WEBHOOK_SECRET: test-secret
