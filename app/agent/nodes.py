@@ -232,7 +232,7 @@ async def execute_action(state: OrderExceptionState) -> OrderExceptionState:
                 f"[SHADOW] Order exception detected: *{exception_type.replace('_', ' ').title()}*\n"
                 f"Routing: `{routing}` | Order: `{order_id}`\n"
                 f"_Would apply tag:_ `{exception_tag}`"
-                + (f" | _Would hold fulfillment_" if routing in FULFILLMENT_HOLD_REASONS else "")
+                + (" | _Would hold fulfillment_" if routing in FULFILLMENT_HOLD_REASONS else "")
             )
             if _event_router is not None:
                 await _event_router.emit(
@@ -327,7 +327,7 @@ async def execute_action(state: OrderExceptionState) -> OrderExceptionState:
             msg = (
                 f"Order exception detected: *{exception_type.replace('_', ' ').title()}*\n"
                 f"Routing: `{routing}` | Order: `{order_id}`"
-                + (f" | Fulfillment hold applied" if fulfillment_held else "")
+                + (" | Fulfillment hold applied" if fulfillment_held else "")
             )
             if _event_router is not None:
                 await _event_router.emit(

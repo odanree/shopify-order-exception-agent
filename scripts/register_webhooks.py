@@ -88,9 +88,8 @@ def main(endpoint_url: str, dry_run: bool) -> None:
                 print(f"  [SKIP]     {topic} -> {address} (422 already exists)")
             else:
                 webhook_id = result.get("id")
-                secret = result.get("api_client_id", "<check Shopify dashboard>")
                 print(f"  [CREATED]  {topic} -> {address} (id={webhook_id})")
-                print(f"             Copy HMAC secret to SHOPIFY_WEBHOOK_SECRET in .env")
+                print("             Copy HMAC secret to SHOPIFY_WEBHOOK_SECRET in .env")
                 print(f"             Webhook ID: {webhook_id}")
 
     print("\nDone.")

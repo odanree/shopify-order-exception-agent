@@ -111,7 +111,7 @@ async def main():
         token=settings.active_shopify_token,
         redis_client=redis_client,
     )
-    slack = SlackClient(settings.slack_webhook_url)
+    SlackClient(settings.slack_webhook_url)
     threpl = ThreePLClient(settings.threpl_webhook_url, settings.threpl_api_key)
     inject_tool_dependencies(shopify=shopify, threpl=threpl, db_factory=AsyncSessionLocal)
 

@@ -175,7 +175,7 @@ async def main():
 
     scenarios = {args.scenario: SCENARIOS[args.scenario]} if args.scenario else SCENARIOS
 
-    print(f"\n🤖 Order Exception Agent — Demo Seed")
+    print("\n🤖 Order Exception Agent — Demo Seed")
     print(f"   Target: {args.url}")
     print(f"   Scenarios: {len(scenarios)}\n")
 

@@ -28,7 +28,6 @@ SAMPLE_ORDER = {
 @pytest.fixture
 def app_with_mocks(test_settings, redis_client):
     """Create a FastAPI TestClient with mocked dependencies."""
-    from app.config import get_settings
     from app.main import app
     from app.services.idempotency import IdempotencyService
 
