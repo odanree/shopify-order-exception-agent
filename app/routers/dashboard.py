@@ -1,14 +1,17 @@
 """Operations dashboard for the order exception agent.
 
-GET /dashboard      — serves a single-page HTML dashboard
+GET /dashboard          — serves a single-page HTML dashboard (Basic Auth protected)
 GET /api/dashboard/stats — returns JSON stats (consumed by the HTML page)
 """
+import secrets
 from datetime import datetime, timedelta, timezone
 from textwrap import dedent
+from typing import Optional
 
 import structlog
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from sqlalchemy import func, select
 
 from app.models.db import AuditLog, DeadLetterEvent
@@ -17,6 +20,30 @@ logger = structlog.get_logger()
 router = APIRouter(tags=["dashboard"])
 
 _SEVEN_DAYS = timedelta(days=7)
+_security = HTTPBasic(auto_error=False)
+
+
+def _require_dashboard_auth(
+    credentials: Optional[HTTPBasicCredentials] = Depends(_security),
+) -> None:
+    """HTTP Basic Auth guard for the dashboard page.
+
+    When admin_api_key is empty (dev/test), auth is skipped.
+    Username is ignored — only the password is checked against admin_api_key.
+    """
+    from app.config import get_settings
+    key = get_settings().admin_api_key
+    if not key:
+        return  # open in dev
+
+    if credentials is None or not secrets.compare_digest(
+        credentials.password.encode(), key.encode()
+    ):
+        raise HTTPException(
+            status_code=401,
+            headers={"WWW-Authenticate": 'Basic realm="Order Exception Agent"'},
+            detail="Unauthorized",
+        )
 
 
 @router.get("/api/dashboard/stats")
@@ -116,6 +143,7 @@ _DASHBOARD_HTML = dedent("""\
   .card.blue .value { color: #60a5fa; }
   h2 { font-size: 0.875rem; font-weight: 600; color: #94a3b8;
        text-transform: uppercase; letter-spacing: .05em; margin-bottom: 1rem; }
+  .section { margin-bottom: 2rem; }
   table { width: 100%; border-collapse: collapse; background: #1e293b;
           border-radius: 10px; overflow: hidden;
           border: 1px solid #334155; }
@@ -130,6 +158,13 @@ _DASHBOARD_HTML = dedent("""\
   .badge.high_value { background: #1e3a5f; color: #93c5fd; }
   .badge.payment { background: #4a1d96; color: #c4b5fd; }
   .badge.unknown { background: #1e293b; color: #94a3b8; }
+  .btn { display: inline-block; padding: .25rem .7rem; border-radius: 6px;
+         font-size: .75rem; font-weight: 600; cursor: pointer; border: none;
+         transition: opacity .15s; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn.retry { background: #1d4ed8; color: #fff; margin-right: .4rem; }
+  .btn.resolve { background: #166534; color: #bbf7d0; }
+  .err-msg { font-size: .75rem; color: #f87171; margin-top: .2rem; }
   .refresh { font-size: .7rem; color: #475569; }
   .shadow-banner { background: #78350f; border-bottom: 2px solid #d97706;
                    padding: .6rem 2rem; font-size: .8rem; font-weight: 600;
@@ -148,12 +183,29 @@ _DASHBOARD_HTML = dedent("""\
   <div class="cards" id="cards">
     <div class="card"><div class="label">Loading…</div><div class="value">—</div></div>
   </div>
-  <h2>Exception Type Breakdown — Last 7 Days</h2>
-  <table><thead><tr><th>Exception Type</th><th>Count</th></tr></thead>
-  <tbody id="type-rows"><tr><td colspan="2">Loading…</td></tr></tbody></table>
+
+  <div class="section">
+    <h2>Exception Type Breakdown — Last 7 Days</h2>
+    <table><thead><tr><th>Exception Type</th><th>Count</th></tr></thead>
+    <tbody id="type-rows"><tr><td colspan="2">Loading…</td></tr></tbody></table>
+  </div>
+
+  <div class="section">
+    <h2>Dead-Letter Queue</h2>
+    <table>
+      <thead><tr>
+        <th>Order ID</th><th>Event Type</th><th>Error</th>
+        <th>Retries</th><th>Created</th><th>Actions</th>
+      </tr></thead>
+      <tbody id="dlq-rows"><tr><td colspan="6">Loading…</td></tr></tbody>
+    </table>
+  </div>
 </div>
 <script>
 const BADGE = {fraud_risk:'fraud',address_invalid:'address',high_value:'high_value',payment_issue:'payment'};
+const fmtTokens = n => n >= 1000 ? (n/1000).toFixed(1)+'k' : String(n);
+const fmtCost = n => n < 0.01 ? '$' + n.toFixed(4) : '$' + n.toFixed(3);
+
 async function load() {
   try {
     const r = await fetch('/api/dashboard/stats');
@@ -161,8 +213,6 @@ async function load() {
     document.getElementById('last-updated').textContent =
       'Last updated: ' + new Date().toLocaleTimeString();
     document.getElementById('shadow-banner').style.display = d.shadow_mode ? 'block' : 'none';
-    const fmtTokens = n => n >= 1000 ? (n/1000).toFixed(1)+'k' : String(n);
-    const fmtCost = n => n < 0.01 ? '$' + n.toFixed(4) : '$' + n.toFixed(3);
     document.getElementById('cards').innerHTML = `
       <div class="card blue">
         <div class="label">Events Processed (7d)</div>
@@ -205,8 +255,73 @@ async function load() {
       '<div class="sub">' + e.message + '</div></div>';
   }
 }
+
+async function loadDlq() {
+  try {
+    const r = await fetch('/api/dlq?limit=20');
+    const d = await r.json();
+    const tbody = document.getElementById('dlq-rows');
+    if (!d.events.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color:#475569">No unresolved events</td></tr>';
+      return;
+    }
+    tbody.innerHTML = d.events.map(e => `
+      <tr id="dlq-row-${e.id}">
+        <td><code>${e.order_id}</code></td>
+        <td>${e.event_type}</td>
+        <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#94a3b8"
+            title="${(e.error_message||'').replace(/"/g,'&quot;')}">${e.error_message||'—'}</td>
+        <td>${e.retry_count}</td>
+        <td style="color:#64748b">${new Date(e.created_at).toLocaleString()}</td>
+        <td>
+          <button class="btn retry" onclick="retryDlq('${e.id}', this)">Retry</button>
+          <button class="btn resolve" onclick="resolveDlq('${e.id}', this)">Resolve</button>
+        </td>
+      </tr>`).join('');
+  } catch(e) {
+    document.getElementById('dlq-rows').innerHTML =
+      '<tr><td colspan="6" style="color:#f87171">Failed to load DLQ</td></tr>';
+  }
+}
+
+async function retryDlq(id, btn) {
+  btn.disabled = true;
+  btn.textContent = 'Retrying…';
+  try {
+    const r = await fetch('/api/dlq/' + id + '/retry', {method: 'POST'});
+    if (r.ok) {
+      document.getElementById('dlq-row-' + id).remove();
+      load();
+    } else {
+      const d = await r.json();
+      btn.disabled = false;
+      btn.textContent = 'Retry';
+      btn.insertAdjacentHTML('afterend', '<div class="err-msg">' + (d.detail||'Retry failed') + '</div>');
+    }
+  } catch(e) {
+    btn.disabled = false;
+    btn.textContent = 'Retry';
+  }
+}
+
+async function resolveDlq(id, btn) {
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/dlq/' + id + '/resolve', {method: 'POST'});
+    if (r.ok) {
+      document.getElementById('dlq-row-' + id).remove();
+      load();
+    } else {
+      btn.disabled = false;
+    }
+  } catch(e) {
+    btn.disabled = false;
+  }
+}
+
 load();
-setInterval(load, 30000);
+loadDlq();
+setInterval(() => { load(); loadDlq(); }, 30000);
 </script>
 </body>
 </html>
@@ -214,5 +329,5 @@ setInterval(load, 30000);
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_page():
+async def dashboard_page(_: None = Depends(_require_dashboard_auth)):
     return HTMLResponse(content=_DASHBOARD_HTML)

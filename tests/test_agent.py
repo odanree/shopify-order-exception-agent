@@ -25,6 +25,8 @@ def _make_state(**overrides) -> OrderExceptionState:
         "routing_decision": None,
         "verification_passed": None,
         "tool_calls_log": [],
+        "llm_input_tokens": None,
+        "llm_output_tokens": None,
         "error": None,
         "retry_count": 0,
         "processing_start_ms": 0,
