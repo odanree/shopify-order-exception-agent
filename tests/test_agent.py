@@ -83,13 +83,12 @@ async def test_decision_node_maps_payment_issue():
 
 
 @pytest.mark.asyncio
-async def test_execute_action_logs_tool_calls():
-    """execute_action should populate tool_calls_log on success."""
+async def test_execute_action_calls_shopify_and_no_error():
+    """execute_action should call update_order_tags on the Shopify client and return no error."""
     from app.agent import nodes
     from app.agent import tools
 
     mock_shopify = AsyncMock()
-    # The tool wrapper returns {"success": True, "data": ...} — mock at that level
     mock_shopify.update_order_tags = AsyncMock(
         return_value={"add": {"node": {"id": "gid://shopify/Order/12345", "tags": ["exception:unknown"]}}}
     )
@@ -102,7 +101,7 @@ async def test_execute_action_logs_tool_calls():
     result = await nodes.execute_action(state)
 
     assert result["error"] is None
-    assert len(result["tool_calls_log"]) >= 1
+    mock_shopify.update_order_tags.assert_called_once()
 
 
 @pytest.mark.asyncio
