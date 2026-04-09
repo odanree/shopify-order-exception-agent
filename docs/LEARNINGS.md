@@ -60,6 +60,60 @@ already at `002`, and run no migrations.
 
 ---
 
+## L003 — LangChain `@tool.ainvoke()` runs in a copied context; ContextVar mutations don't propagate back
+
+**Date:** 2026-04-09  
+**Area:** Testing / LangChain
+
+### What happened
+
+`execute_action` uses a `ContextVar` (`_tool_calls_ctx`) to accumulate tool call log entries
+across tool invocations:
+
+```python
+_tool_calls_ctx.set(list(state.get("tool_calls_log", [])))
+tag_result = await update_order_tags.ainvoke(...)   # tool calls _log_call → _tool_calls_ctx.set(...)
+updated_log = _tool_calls_ctx.get([])              # expected: [{"tool": "update_order_tags", ...}]
+```
+
+In tests, `updated_log` was always `[]` even after the tool ran successfully. The Shopify
+client mock was being called, so the tool did execute — but `_tool_calls_ctx` never reflected it.
+
+### Root cause
+
+LangChain's `@tool` decorated functions run via `copy_context().run(...)` internally.
+`copy_context()` creates a snapshot of the current context. Mutations to ContextVars
+*inside* that copy (i.e., inside the tool) don't propagate back to the parent context.
+The parent's `_tool_calls_ctx.get()` still sees the value from before the tool ran.
+
+This is by design in LangChain for tracing isolation — the same mechanism that lets
+LangSmith/LangFuse attach per-tool callbacks without leaking state.
+
+### Fix (in tests)
+
+Don't assert on `tool_calls_log` length in unit tests that mock the underlying client.
+Assert on the observable side effect instead:
+
+```python
+# Instead of:
+assert len(result["tool_calls_log"]) >= 1
+
+# Do:
+mock_shopify.update_order_tags.assert_called_once()
+assert result["error"] is None
+```
+
+### Prevention going forward
+
+- `ContextVar`-based accumulation works within a single coroutine (same task context).
+  It does **not** work across `copy_context()` boundaries introduced by LangChain tools.
+- Integration tests that run the full LangGraph pipeline (not just a single node) will
+  populate `tool_calls_log` correctly, because LangGraph node calls preserve context
+  in the same task. Unit tests that isolate a single node and call `ainvoke` on a
+  `@tool` decorated function should assert on the mock, not on the context var.
+
+---
+
 ## L002 — `docker compose run` env vars can be shadowed by service definition
 
 **Date:** 2026-04-08  
